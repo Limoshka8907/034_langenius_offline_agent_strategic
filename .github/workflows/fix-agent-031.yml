@@ -1,0 +1,135 @@
+name: Fix Agent 0.0.31 Offline Package
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip zip python3 python3-pip
+          python3 -m pip install --user "uv==0.10.10"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Unpack current offline package
+        run: |
+          set -e
+          mkdir -p work out
+
+          PKG="$(ls *0.0.31*offline*.difypkg | head -n 1)"
+          echo "Using package: $PKG"
+
+          unzip -q "$PKG" -d work
+
+          echo "Package content:"
+          find work -maxdepth 2 -type f | sort | head -n 100
+
+      - name: Patch dependencies to dify-plugin 0.5.1
+        run: |
+          set -e
+          cd work
+
+          rm -rf wheels .venv uv.lock
+          mkdir -p wheels
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("pyproject.toml")
+          s = p.read_text(encoding="utf-8")
+
+          # Force old Agent 0.0.31 to use SDK 0.5.x, not 0.7.x
+          s = re.sub(
+              r'dify[_-]plugin[^"\']*',
+              'dify-plugin>=0.5.0,<0.6.0',
+              s
+          )
+
+          # Remove existing [tool.uv] block if any
+          s = re.sub(r'(?ms)^\[tool\.uv\]\n.*?(?=^\[|\Z)', '', s).rstrip()
+
+          s += '''
+
+          [tool.uv]
+          no-index = true
+          find-links = ["./wheels"]
+          environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+          required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+          '''
+
+          p.write_text(s + "\n", encoding="utf-8")
+          print(p.read_text(encoding="utf-8"))
+          PY
+
+          cat > requirements.txt <<'EOF'
+          --no-index
+          --find-links=./wheels
+          dify-plugin>=0.5.0,<0.6.0
+          EOF
+
+      - name: Download correct Linux wheels
+        run: |
+          set -e
+          cd work
+
+          python3 -m pip download \
+            --only-binary=:all: \
+            --prefer-binary \
+            --platform manylinux2014_x86_64 \
+            --implementation cp \
+            --python-version 3.12 \
+            --abi cp312 \
+            "dify-plugin>=0.5.0,<0.6.0" \
+            -d wheels \
+            --index-url https://pypi.org/simple
+
+          echo "Downloaded wheels:"
+          ls -lh wheels
+
+          echo "Check dify-plugin version:"
+          ls wheels | grep -i "dify_plugin"
+
+      - name: Build uv.lock with local wheels only
+        run: |
+          set -e
+          cd work
+
+          uv lock \
+            --python 3.12 \
+            --offline \
+            --prerelease=allow
+
+          echo "Lock check:"
+          grep -n "dify-plugin" uv.lock || true
+
+      - name: Repack fixed difypkg
+        run: |
+          set -e
+
+          cd work
+
+          # remove possible old wrong wheels if still present
+          find wheels -name "dify_plugin-0.7*.whl" -delete
+          find wheels -name "dify_plugin-0.8*.whl" -delete
+
+          echo "Final dify-plugin wheel:"
+          ls wheels | grep -i "dify_plugin"
+
+          zip -qr ../out/langgenius-agent_0.0.31-fixed-sdk-0.5.1-offline.difypkg .
+
+          cd ..
+          ls -lh out/*.difypkg
+
+      - name: Upload fixed package
+        uses: actions/upload-artifact@v4
+        with:
+          name: langgenius-agent-0.0.31-fixed-sdk-0.5.1-offline
+          path: out/*.difypkg
