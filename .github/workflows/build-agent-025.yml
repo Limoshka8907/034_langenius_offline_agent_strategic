@@ -1,0 +1,46 @@
+name: Build Agent 0.0.25 Offline Package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl unzip zip python3 python3-pip
+
+      - name: Clone repackager
+        run: |
+          git clone https://github.com/junjiem/dify-plugin-repackaging.git repack
+          chmod +x repack/plugin_repackaging.sh
+
+      - name: Build true offline package for Linux x86_64
+        run: |
+          set -e
+          cd repack
+
+          ./plugin_repackaging.sh -p manylinux2014_x86_64 market langgenius agent 0.0.25
+
+          mkdir -p ../out
+
+          echo "All generated packages:"
+          find . -name "*.difypkg" -type f -print -exec ls -lh {} \;
+
+          find . -name "*.difypkg" -type f -exec cp {} ../out/ \;
+
+          echo "Output:"
+          ls -lh ../out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: langgenius-agent-0.0.25-offline
+          path: out/*.difypkg
