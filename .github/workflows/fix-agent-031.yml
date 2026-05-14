@@ -103,8 +103,7 @@ jobs:
           cd work
 
           uv lock \
-            --python-version 3.12 \
-            --python-platform linux \
+            --python 3.12 \
             --offline \
             --prerelease=allow
 
